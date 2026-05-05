@@ -31,12 +31,12 @@ class BlockDiffusionCollator:
         # Guarantee useful supervision in every block.
         blocks = self.context_length // self.block_size
         mask_view = mask.view(batch, blocks, self.block_size)
-        for b in range(batch):
-            for blk in range(blocks):
-                if not mask_view[b, blk].any():
-                    mask_view[b, blk, torch.randint(0, self.block_size, (1,), device=device)] = True
-                if mask_view[b, blk].all():
-                    mask_view[b, blk, torch.randint(0, self.block_size, (1,), device=device)] = False
+        block_has_none = ~mask_view.any(dim=-1)
+        block_has_all = mask_view.all(dim=-1)
+        if block_has_none.any() or block_has_all.any():
+            b_idx, blk_idx = torch.where(block_has_none | block_has_all)
+            pos_idx = torch.randint(0, self.block_size, (b_idx.numel(),), device=device)
+            mask_view[b_idx, blk_idx, pos_idx] = block_has_none[b_idx, blk_idx]
         return mask
 
     def _make_view(self, clean: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

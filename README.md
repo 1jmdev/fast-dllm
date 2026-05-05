@@ -76,25 +76,32 @@ If FlashAttention 2 is not installed, remove `--attn-implementation flash_attent
 
 ### 8GB GPU Config
 
-Use this for a small memory-constrained run:
+Use this for an optimized single-GPU run:
 
 ```bash
-accelerate launch -m fastdllm.train \
+accelerate launch \
+  --num_processes 1 \
+  --num_machines 1 \
+  --mixed_precision no \
+  --dynamo_backend no \
+  -m fastdllm.train \
   --base-model HuggingFaceTB/SmolLM2-135M \
   --train-jsonl data/fineweb_300mb.jsonl \
   --output-dir outputs/smollm2-135m-fastdllm \
   --context-length 512 \
   --block-size 32 \
-  --per-device-batch-size 1 \
-  --gradient-accumulation-steps 16 \
+  --per-device-batch-size 2 \
+  --gradient-accumulation-steps 8 \
   --max-steps 1000 \
   --learning-rate 2e-5 \
   --warmup-steps 100 \
   --dtype bf16 \
-  --gradient-checkpointing
+  --attn-implementation sdpa \
+  --torch-compile \
+  --dataloader-num-workers 2
 ```
 
-If your GPU does not support BF16, use `--dtype fp16`.
+If you run out of memory, use `--per-device-batch-size 1 --gradient-accumulation-steps 16`; only add `--gradient-checkpointing` if needed. If your GPU does not support BF16, use `--dtype fp16`.
 
 The 300MB dataset and short runs are for reproducible experimentation, not paper-level reproduction. Increase `--target-bytes`, `--max-steps`, and context length for more serious training.
 

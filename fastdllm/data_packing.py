@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Iterator
 
 import torch
-from torch.utils.data import IterableDataset
+from torch.utils.data import IterableDataset, get_worker_info
 from transformers import PreTrainedTokenizerBase
 
 
@@ -32,9 +32,14 @@ class JsonlTokenBlockDataset(IterableDataset):
             raise FileNotFoundError(f"Missing dataset file: {self.path}")
 
     def _lines(self) -> Iterator[str]:
+        worker = get_worker_info()
+        worker_id = worker.id if worker is not None else 0
+        num_workers = worker.num_workers if worker is not None else 1
         while True:
             with self.path.open("r", encoding="utf-8") as f:
-                for line in f:
+                for line_idx, line in enumerate(f):
+                    if line_idx % num_workers != worker_id:
+                        continue
                     line = line.strip()
                     if line:
                         yield line

@@ -17,6 +17,11 @@ from .data_packing import JsonlTokenBlockDataset
 from .utils import ensure_tokenizer_tokens, resolve_dtype, set_seed
 
 
+def unwrap_for_save(accelerator: Accelerator, model):
+    unwrapped = accelerator.unwrap_model(model)
+    return getattr(unwrapped, "_orig_mod", unwrapped)
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Fine-tune SmolLM2 with a Fast-dLLM v2 style objective.")
     p.add_argument("--base-model", default=DEFAULT_BASE_MODEL)
@@ -35,6 +40,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dtype", default="bf16", choices=["auto", "bf16", "bfloat16", "fp16", "float16", "fp32", "float32"])
     p.add_argument("--attn-implementation", default=None, choices=[None, "eager", "sdpa", "flash_attention_2"])
     p.add_argument("--gradient-checkpointing", action="store_true")
+    p.add_argument("--torch-compile", action="store_true")
+    p.add_argument("--compile-mode", default="reduce-overhead", choices=["default", "reduce-overhead", "max-autotune"])
+    p.add_argument("--tf32", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--dataloader-num-workers", type=int, default=0)
+    p.add_argument("--dataloader-prefetch-factor", type=int, default=2)
     p.add_argument("--save-every", type=int, default=500)
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
@@ -43,7 +53,7 @@ def parse_args() -> argparse.Namespace:
 def save_checkpoint(accelerator: Accelerator, model, tokenizer, output_dir: str, step: int) -> None:
     ckpt_dir = Path(output_dir) / f"checkpoint-{step}"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
-    unwrapped = accelerator.unwrap_model(model)
+    unwrapped = unwrap_for_save(accelerator, model)
     unwrapped.save_pretrained(
         ckpt_dir,
         is_main_process=accelerator.is_main_process,
@@ -57,6 +67,10 @@ def save_checkpoint(accelerator: Accelerator, model, tokenizer, output_dir: str,
 def main() -> None:
     args = parse_args()
     set_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = args.tf32
+        torch.backends.cudnn.allow_tf32 = args.tf32
+        torch.set_float32_matmul_precision("high" if args.tf32 else "highest")
     accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps)
 
     tokenizer = AutoTokenizer.from_pretrained(args.base_model, use_fast=True)
@@ -75,6 +89,11 @@ def main() -> None:
     model.config.use_cache = False
     if args.gradient_checkpointing:
         model.gradient_checkpointing_enable()
+    if args.torch_compile:
+        if torch.cuda.is_available():
+            model = torch.compile(model, options={"triton.cudagraphs": False})
+        else:
+            model = torch.compile(model, mode=args.compile_mode)
 
     dataset = JsonlTokenBlockDataset(
         args.train_jsonl,
@@ -88,15 +107,21 @@ def main() -> None:
         context_length=args.context_length,
         attention_dtype=resolve_dtype(args.dtype) if args.dtype != "auto" else torch.float32,
     )
-    loader = DataLoader(
-        dataset,
-        batch_size=args.per_device_batch_size,
-        collate_fn=collator,
-        num_workers=0,
-        pin_memory=torch.cuda.is_available(),
-    )
+    loader_kwargs = {
+        "batch_size": args.per_device_batch_size,
+        "collate_fn": collator,
+        "num_workers": args.dataloader_num_workers,
+        "pin_memory": torch.cuda.is_available(),
+        "persistent_workers": args.dataloader_num_workers > 0,
+    }
+    if args.dataloader_num_workers > 0:
+        loader_kwargs["prefetch_factor"] = args.dataloader_prefetch_factor
+    loader = DataLoader(dataset, **loader_kwargs)
 
-    optimizer = AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+    optimizer_kwargs = {"lr": args.learning_rate, "weight_decay": args.weight_decay}
+    if torch.cuda.is_available():
+        optimizer_kwargs["fused"] = True
+    optimizer = AdamW(model.parameters(), **optimizer_kwargs)
     scheduler = get_cosine_schedule_with_warmup(
         optimizer,
         num_warmup_steps=args.warmup_steps,
@@ -105,6 +130,7 @@ def main() -> None:
 
     model, optimizer, loader, scheduler = accelerator.prepare(model, optimizer, loader, scheduler)
     model.train()
+    model_dtype = next(p.dtype for p in model.parameters() if p.is_floating_point())
 
     progress = tqdm(range(args.max_steps), disable=not accelerator.is_local_main_process)
     step = 0
@@ -114,9 +140,8 @@ def main() -> None:
     while step < args.max_steps:
         for batch in loader:
             with accelerator.accumulate(model):
-                attn_dtype = next(p.dtype for p in model.parameters() if p.is_floating_point())
                 if "attention_mask" in batch and batch["attention_mask"].is_floating_point():
-                    batch["attention_mask"] = batch["attention_mask"].to(dtype=attn_dtype)
+                    batch["attention_mask"] = batch["attention_mask"].to(dtype=model_dtype)
                 out = model(**batch, use_cache=False)
                 loss = out.loss
                 detached_loss = loss.detach().float().item()
@@ -148,7 +173,7 @@ def main() -> None:
 
     accelerator.wait_for_everyone()
     final_dir = Path(args.output_dir) / "final"
-    unwrapped = accelerator.unwrap_model(model)
+    unwrapped = unwrap_for_save(accelerator, model)
     unwrapped.save_pretrained(
         final_dir,
         is_main_process=accelerator.is_main_process,
