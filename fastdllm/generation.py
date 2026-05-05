@@ -117,6 +117,7 @@ def generate_block_diffusion(
         raise ValueError("max_new_tokens must be positive")
 
     device = next(model.parameters()).device
+    model_dtype = next(p.dtype for p in model.parameters() if p.is_floating_point())
     mask_token_id = _mask_id(tokenizer, mask_token)
     eos = eos_token_id if eos_token_id is not None else tokenizer.eos_token_id
     max_steps = max_steps_per_block or (block_size * 4)
@@ -147,7 +148,7 @@ def generate_block_diffusion(
                         prefix_len,
                         block_size,
                         device=device,
-                        dtype=torch.float32,
+                        dtype=model_dtype,
                     )
                     out = model(input_ids=x, attention_mask=attention_mask, use_cache=False)
                     forward_passes += 1

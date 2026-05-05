@@ -148,9 +148,9 @@ def main() -> None:
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-                optimizer.step()
-                scheduler.step()
-                optimizer.zero_grad(set_to_none=True)
+                    optimizer.step()
+                    scheduler.step()
+                    optimizer.zero_grad(set_to_none=True)
 
             pending_loss += detached_loss
             pending_count += 1
