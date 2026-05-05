@@ -85,4 +85,4 @@ def make_generation_attention_mask(
 def expand_mask_for_batch(mask: torch.Tensor, batch_size: int) -> torch.Tensor:
     if mask.shape[0] == batch_size:
         return mask
-    return mask.expand(batch_size, -1, -1, -1).contiguous()
+    return mask.expand(batch_size, -1, -1, -1)

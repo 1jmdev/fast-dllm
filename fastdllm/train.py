@@ -86,6 +86,7 @@ def main() -> None:
         mask_token_id=mask_id,
         block_size=args.block_size,
         context_length=args.context_length,
+        attention_dtype=resolve_dtype(args.dtype) if args.dtype != "auto" else torch.float32,
     )
     loader = DataLoader(
         dataset,

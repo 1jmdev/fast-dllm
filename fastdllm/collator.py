@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 
@@ -15,6 +15,7 @@ class BlockDiffusionCollator:
     mask_min_p: float = 0.15
     mask_max_p: float = 0.85
     attention_dtype: torch.dtype = torch.float32
+    _base_attention_mask: torch.Tensor | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.context_length % self.block_size != 0:
@@ -61,11 +62,12 @@ class BlockDiffusionCollator:
         input_ids = torch.cat([input_a, input_b], dim=0)
         labels = torch.cat([labels_a, labels_b], dim=0)
 
-        base_mask = make_training_attention_mask(
-            self.context_length,
-            self.block_size,
-            device=device,
-            dtype=self.attention_dtype,
-        )
-        attention_mask = expand_mask_for_batch(base_mask, input_ids.shape[0])
+        if self._base_attention_mask is None or self._base_attention_mask.device != device:
+            self._base_attention_mask = make_training_attention_mask(
+                self.context_length,
+                self.block_size,
+                device=device,
+                dtype=self.attention_dtype,
+            )
+        attention_mask = expand_mask_for_batch(self._base_attention_mask, input_ids.shape[0])
         return {"input_ids": input_ids, "attention_mask": attention_mask, "labels": labels}
