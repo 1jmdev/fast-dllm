@@ -43,10 +43,11 @@ class BlockDiffusionCollator:
         input_ids = torch.cat([noised, clean], dim=1)
         labels = torch.full_like(input_ids, -100)
 
-        # AutoModelForCausalLM shifts labels internally:
-        # label at position i is predicted from logit at position i - 1.
-        label_slice = labels[:, : self.context_length]
-        label_slice[mask] = clean[mask]
+        # AutoModelForCausalLM shifts labels internally, so place token i's label
+        # at i + 1 to train the logit emitted at noised position i.
+        shifted_labels = torch.full_like(clean, -100)
+        shifted_labels[mask] = clean[mask]
+        labels[:, 1 : self.context_length + 1] = shifted_labels
         return input_ids, labels
 
     def __call__(self, examples: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:

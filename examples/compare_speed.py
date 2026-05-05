@@ -114,7 +114,7 @@ def main() -> None:
     base_tokenizer = AutoTokenizer.from_pretrained(args.base_model, use_fast=True)
     base_model = AutoModelForCausalLM.from_pretrained(
         args.base_model,
-        torch_dtype=resolve_dtype(args.dtype),
+        dtype=resolve_dtype(args.dtype),
     ).to(device)
     base_model.eval()
 

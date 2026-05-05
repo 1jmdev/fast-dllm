@@ -69,7 +69,7 @@ def load_model_and_tokenizer(
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, use_fast=True)
     tokenizer, mask_id, token_added = ensure_tokenizer_tokens(tokenizer, mask_token=mask_token)
 
-    kwargs: dict[str, Any] = {"torch_dtype": resolve_dtype(dtype)}
+    kwargs: dict[str, Any] = {"dtype": resolve_dtype(dtype)}
     if attn_implementation:
         kwargs["attn_implementation"] = attn_implementation
     model = AutoModelForCausalLM.from_pretrained(model_name_or_path, **kwargs)
